@@ -1,96 +1,89 @@
-import { getCategories } from "./mockedApi";
+import { Category, CategoryListElement, CategoryResponse } from './types';
 
-export interface CategoryListElement {
-  name: string;
-  id: number;
-  image: string;
-  order: number;
-  children: CategoryListElement[];
-  showOnHome: boolean;
-}
+const extractDisplayOrderFromTitle = (
+  title: string | undefined,
+  id: number,
+  hasChildren: boolean
+): number => {
+  if (!title) {
+    return id;
+  }
 
-export const categoryTree = async (): Promise<CategoryListElement[]> => {
+  const orderStr = title.includes('#') ? title.split('#')[0] : title;
+  const parsedOrder = parseInt(orderStr);
 
-  const res = await getCategories();
+  return isNaN(parsedOrder) ? (hasChildren ? id : id) : parsedOrder;
+};
 
-  if (!res.data) {
+const hasHomePageMarker = (title: string | undefined): boolean =>
+  Boolean(title?.includes('#'));
+
+const convertToDisplayCategory = (category: Category): CategoryListElement => {
+  const { id, MetaTagDescription: image = '', name, Title } = category;
+  const hasChildren = category.children?.length > 0;
+
+  return {
+    id,
+    image,
+    name,
+    order: extractDisplayOrderFromTitle(Title, id, hasChildren),
+    children: [],
+    showOnHome: false,
+  };
+};
+
+const buildCategoryHierarchy = (category: Category): CategoryListElement => {
+  const node = convertToDisplayCategory(category);
+
+  if (category.children?.length) {
+    node.children = category.children
+      .map(buildCategoryHierarchy)
+      .sort((a, b) => a.order - b.order);
+  }
+  return node;
+};
+
+const shouldShowCategory = (
+  category: Category,
+  categories: Category[],
+  markedIds: number[]
+): boolean => {
+  if (categories.length <= 5) {
+    return true;
+  }
+
+  if (markedIds.length > 0) {
+    return markedIds.includes(category.id);
+  }
+
+  return categories.indexOf(category) < 3;
+};
+
+const determineHomePageVisibility = (
+  categories: CategoryListElement[],
+  markedIds: number[]
+): CategoryListElement[] =>
+  categories.map((category) => ({
+    ...category,
+    showOnHome: shouldShowCategory(category, categories, markedIds),
+  }));
+
+export const categoryTree = (
+  response: CategoryResponse
+): CategoryListElement[] => {
+  const { data } = response;
+
+  if (!data) {
     return [];
   }
 
-  const toShowOnHome: number[] = [];
+  const homePageMarkedIds = data
+    .filter(({ Title }) => hasHomePageMarker(Title))
+    .map(({ id }) => id);
 
-  let result = res.data.map((c1) => {
-    let order = c1.Title;
-    if (c1.Title && c1.Title.includes("#")) {
-      order = c1.Title.split("#")[0];
-      toShowOnHome.push(c1.id);
-    }
+  const processedCategories = data
+    .map(buildCategoryHierarchy)
+    .sort((a, b) => a.order - b.order);
 
-    let orderL1 = parseInt(order);
-    if (isNaN(orderL1)) {
-      orderL1 = c1.id;
-    }
-    let l2Kids = c1.children
-      ? c1.children.map((c2) => {
-          let order2 = c1.Title;
-          if (c2.Title && c2.Title.includes("#")) {
-            order2 = c2.Title.split("#")[0];
-          }
-          let orderL2 = parseInt(order2);
-          if (isNaN(orderL2)) {
-            orderL2 = c2.id;
-          }
-          let l3Kids = c2.children
-            ? c2.children.map((c3) => {
-                let order3 = c1.Title;
-                if (c3.Title && c3.Title.includes("#")) {
-                  order3 = c3.Title.split("#")[0];
-                }
-                let orderL3 = parseInt(order3);
-                if (isNaN(orderL3)) {
-                  orderL3 = c3.id;
-                }
-                return {
-                  id: c3.id,
-                  image: c3.MetaTagDescription,
-                  name: c3.name,
-                  order: orderL3,
-                  children: [],
-                  showOnHome: false,
-                };
-              })
-            : [];
-          l3Kids.sort((a, b) => a.order - b.order);
-          return {
-            id: c2.id,
-            image: c2.MetaTagDescription,
-            name: c2.name,
-            order: orderL2,
-            children: l3Kids,
-            showOnHome: false,
-          };
-        })
-      : [];
-    l2Kids.sort((a, b) => a.order - b.order);
-    return {
-      id: c1.id,
-      image: c1.MetaTagDescription,
-      name: c1.name,
-      order: orderL1,
-      children: l2Kids,
-      showOnHome: false,
-    };
-  });
-
-  result.sort((a, b) => a.order - b.order);
-
-  if (result.length <= 5) {
-    result.forEach((a) => (a.showOnHome = true));
-  } else if (toShowOnHome.length > 0) {
-    result.forEach((x) => (x.showOnHome = toShowOnHome.includes(x.id)));
-  } else {
-    result.forEach((x, index) => (x.showOnHome = index < 3));
-  }
-
-  return result;
+  return determineHomePageVisibility(processedCategories, homePageMarkedIds);
 };
